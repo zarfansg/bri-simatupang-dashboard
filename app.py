@@ -20,8 +20,7 @@ from data_loader import (
     format_rupiah,
     clear_cache,
     save_uploaded_file,
-    UNIT_METADATA,
-    DEFAULT_SOURCE_DIR
+    UNIT_METADATA
 )
 from exporter import export_dashboard_to_excel
 from metrics import (

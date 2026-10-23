@@ -14,6 +14,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SAMPLE_DIR = os.path.join(BASE_DIR, "data", "sample")
 UPLOAD_DIR = os.path.join(BASE_DIR, "data", "latest")
 CACHE_DIR = os.path.join(BASE_DIR, ".cache")
+DEFAULT_SOURCE_DIR = SAMPLE_DIR
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
