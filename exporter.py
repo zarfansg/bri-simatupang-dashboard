@@ -21,13 +21,13 @@ def export_dashboard_to_excel(lending_kpis, funding_kpis, df_matrix, reporting_d
     wb = openpyxl.Workbook()
     
     # Styles
-    font_title = Font(name="Calibri", size=14, bold=True, color="00529C")
+    font_title = Font(name="Calibri", size=14, bold=True, color="0857C3")
     font_subtitle = Font(name="Calibri", size=10, italic=True, color="555555")
     font_header = Font(name="Calibri", size=10, bold=True, color="FFFFFF")
     font_bold = Font(name="Calibri", size=10, bold=True)
     font_regular = Font(name="Calibri", size=10)
     
-    fill_header = PatternFill(start_color="00529C", end_color="00529C", fill_type="solid")
+    fill_header = PatternFill(start_color="0857C3", end_color="0857C3", fill_type="solid")
     fill_subtotal = PatternFill(start_color="E6F0FA", end_color="E6F0FA", fill_type="solid")
     fill_kpi_card = PatternFill(start_color="F1F5F9", end_color="F1F5F9", fill_type="solid")
     
@@ -57,7 +57,7 @@ def export_dashboard_to_excel(lending_kpis, funding_kpis, df_matrix, reporting_d
     
     # Lending Summary Table
     ws1["A4"] = "1. POSISI PINJAMAN (LENDING — MAIN KPI: SMALL & CONSUMER)"
-    ws1["A4"].font = Font(name="Calibri", size=11, bold=True, color="00529C")
+    ws1["A4"].font = Font(name="Calibri", size=11, bold=True, color="0857C3")
     
     headers_lending = ["Indikator Kredit", "Baki Debet (Rp)", "Jumlah Rekening", "Porsi (%)"]
     for col_idx, h in enumerate(headers_lending, 1):
@@ -99,7 +99,7 @@ def export_dashboard_to_excel(lending_kpis, funding_kpis, df_matrix, reporting_d
                 
     # Funding Summary Table
     ws1["A12"] = "2. POSISI SIMPANAN (FUNDING / DANA PIHAK KETIGA)"
-    ws1["A12"].font = Font(name="Calibri", size=11, bold=True, color="00529C")
+    ws1["A12"].font = Font(name="Calibri", size=11, bold=True, color="0857C3")
     
     headers_funding = ["Jenis Simpanan", "Total Saldo (Rp)", "Jumlah Rekening / Bilyet", "Rasio CASA (%)"]
     for col_idx, h in enumerate(headers_funding, 1):

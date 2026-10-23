@@ -69,14 +69,14 @@ except Exception as e:
 # --- SIDEBAR: NAVIGATION & FILTERS ---
 with st.sidebar:
     st.markdown(f"""
-    <div style="text-align: center; padding: 12px 0 20px 0;">
-        <div style="font-size: 26px; font-weight: 800; color: {BRI_BLUE}; letter-spacing: -1px;">
+    <div style="text-align: center; padding: 12px 0 18px 0; border-bottom: 1px solid rgba(255,255,255,0.2); margin-bottom: 16px;">
+        <div style="font-size: 26px; font-weight: 800; color: #FFFFFF; letter-spacing: -0.5px;">
             BANK BRI
         </div>
-        <div style="font-size: 13px; font-weight: 600; color: {BRI_ORANGE}; letter-spacing: 0.5px;">
+        <div style="font-size: 12px; font-weight: 700; color: #FFD2A8; letter-spacing: 0.5px; margin-top: 3px;">
             KC JAKARTA TB SIMATUPANG
         </div>
-        <div style="font-size: 11px; color: #64748B; margin-top: 4px;">
+        <div style="font-size: 11px; color: #E0EDFB; margin-top: 4px;">
             Branch Code: <b>443</b> | Kanwil DKI 2
         </div>
     </div>
@@ -112,14 +112,14 @@ with st.sidebar:
             reporting_date = p_val
             
     st.markdown(f"""
-    <div class="filter-box" style="margin-top: 15px;">
-        <div style="font-size: 11px; font-weight: 600; color: #1E40AF; text-transform: uppercase;">
+    <div class="sidebar-info-card">
+        <div class="card-badge">
             📅 Posisi Data Laporan
         </div>
-        <div style="font-size: 14px; font-weight: 700; color: {BRI_BLUE}; margin-top: 2px;">
+        <div class="card-date">
             {reporting_date}
         </div>
-        <div style="font-size: 11px; color: #475569; margin-top: 4px;">
+        <div class="card-source">
             Sumber: Raw Banking Reports BRI
         </div>
     </div>
@@ -323,8 +323,8 @@ if menu_page == "Ringkasan (Overview)":
                 hole=0.45,
                 color="Produk",
                 color_discrete_map={
-                    "Giro": "#00529C",
-                    "Deposito": "#F37021",
+                    "Giro": BRI_BLUE,
+                    "Deposito": BRI_ORANGE,
                     "Tabungan": "#10B981"
                 }
             )
@@ -347,7 +347,7 @@ if menu_page == "Ringkasan (Overview)":
                 y="Baki Debet (Rp)",
                 color="Status",
                 color_discrete_map={
-                    "Main KPI": "#00529C",
+                    "Main KPI": BRI_BLUE,
                     "Dikecualikan (Data Quality)": "#94A3B8"
                 },
                 text="Baki Debet (Rp)"
@@ -452,7 +452,7 @@ elif menu_page == "Pinjaman (Lending)":
                 y="Deskripsi Produk",
                 color="Segmen",
                 orientation="h",
-                color_discrete_map={"Small": "#00529C", "Consumer": "#F37021"}
+                color_discrete_map={"Small": BRI_BLUE, "Consumer": BRI_ORANGE}
             )
             fig_lt.update_layout(yaxis=dict(autorange="reversed"), height=380, margin=dict(l=20, r=20, t=20, b=20))
             st.plotly_chart(fig_lt, use_container_width=True)
