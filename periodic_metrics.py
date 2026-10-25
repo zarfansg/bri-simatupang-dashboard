@@ -88,9 +88,9 @@ class PeriodicAnalysisSummary:
 
 
 def extract_daily_snapshot_from_batch(
-    reporting_date: str,
-    display_date: str,
-    reports_dict: Dict[str, Any],
+    reporting_date: Union[str, Dict[str, Any]],
+    display_date: Optional[str] = None,
+    reports_dict: Optional[Dict[str, Any]] = None,
     master_df: Optional[pd.DataFrame] = None
 ) -> DailyMetricsSnapshot:
     """
@@ -99,7 +99,27 @@ def extract_daily_snapshot_from_batch(
     - DI319: Tabungan (Balance dalam IDR)
     - DI321: Giro (BALANCE)
     - CI324: Deposito (CBAL Base)
+
+    Supports both caller styles:
+    1. extract_daily_snapshot_from_batch(batch_dict, master_df=...)
+    2. extract_daily_snapshot_from_batch(reporting_date, display_date, reports_dict, master_df=...)
     """
+    if isinstance(reporting_date, dict):
+        batch_dict = reporting_date
+        reports_dict = batch_dict.get("reports", {})
+        display_date = batch_dict.get("display_date", "")
+        first_r = next(iter(reports_dict.values())) if reports_dict else {}
+        first_res = first_r.get("res") if isinstance(first_r, dict) else None
+        if first_res and hasattr(first_res, "reporting_date"):
+            reporting_date = first_res.reporting_date
+        else:
+            reporting_date = batch_dict.get("reporting_date", "")
+
+    if reports_dict is None:
+        reports_dict = {}
+    if display_date is None:
+        display_date = str(reporting_date)
+
     if master_df is None:
         master_df = load_loan_master()
 

@@ -176,7 +176,13 @@ with st.sidebar:
                         master_loan = load_loan_master()
                         new_snaps = []
                         for comp_date in val_res.complete_dates:
-                            snap = extract_daily_snapshot_from_batch(val_res.complete_batches[comp_date], master_df=master_loan)
+                            b_dict = val_res.complete_batches[comp_date]
+                            snap = extract_daily_snapshot_from_batch(
+                                reporting_date=comp_date,
+                                display_date=b_dict["display_date"],
+                                reports_dict=b_dict["reports"],
+                                master_df=master_loan
+                            )
                             new_snaps.append(snap)
                         
                         save_periodic_snapshots(new_snaps, retention_days=14)
@@ -185,21 +191,91 @@ with st.sidebar:
                         latest_date = max(val_res.complete_dates)
                         latest_batch = val_res.complete_batches[latest_date]
                         for r_type, f_obj in latest_batch["reports"].items():
+                            file_raw = f_obj.get("file_obj", f_obj) if isinstance(f_obj, dict) else f_obj
+                            if hasattr(file_raw, "seek"):
+                                file_raw.seek(0)
                             if r_type == "LW321":
-                                save_uploaded_file(f_obj, "LW321 (1).xlsx")
+                                save_uploaded_file(file_raw, "LW321 (1).xlsx")
                             elif r_type == "DI321":
-                                save_uploaded_file(f_obj, "DI321.xlsx")
+                                save_uploaded_file(file_raw, "DI321.xlsx")
                             elif r_type == "CI324":
-                                save_uploaded_file(f_obj, "CI324_MULTI_PN_202309.xlsx")
+                                save_uploaded_file(file_raw, "CI324_MULTI_PN_202309.xlsx")
                             elif r_type == "DI319":
-                                save_uploaded_file(f_obj, "DI319_MULTI_PN_202309.xlsx")
+                                save_uploaded_file(file_raw, "DI319_MULTI_PN_202309.xlsx")
                                 
                         clear_cache()
                         st.cache_data.clear()
                         st.success(f"✅ Berhasil memproses {len(val_res.complete_dates)} tanggal laporan! Tersimpan di server.")
                         st.rerun()
                     else:
-                        st.error("⚠️ Belum ada batch lengkap (4/4 laporan pada tanggal yang sama). Pastikan keempat file (LW321, DI319, DI321, CI324) memiliki tanggal PERIODE yang identik.")
+                        st.error("⚠️ **Belum ada batch lengkap (4/4 jenis laporan pada tanggal yang sama).**")
+                        
+                        # Tally counts across all analyzed files
+                        type_counts = {"LW321": 0, "DI319": 0, "DI321": 0, "CI324": 0}
+                        for b in val_res.incomplete_batches.values():
+                            for r in b.get("present", []):
+                                type_counts[r] = type_counts.get(r, 0) + 1
+                            for dup in b.get("duplicates", []):
+                                r_dup = dup.get("report_type")
+                                if r_dup in type_counts:
+                                    type_counts[r_dup] += 1
+                        for d_info in val_res.complete_batches.values():
+                            for r in d_info.get("reports", {}).keys():
+                                type_counts[r] = type_counts.get(r, 0) + 1
+                                
+                        # Detect if period is identical but only 1 report type was uploaded
+                        types_present = [t for t, c in type_counts.items() if c > 0]
+                        if len(types_present) == 1 and val_res.all_detected_dates:
+                            single_t = types_present[0]
+                            t_names = {
+                                "CI324": "Deposito (CI324)",
+                                "LW321": "Pinjaman (LW321)",
+                                "DI319": "Tabungan (DI319)",
+                                "DI321": "Giro (DI321)"
+                            }
+                            st.warning(
+                                f"💡 **Penyebab Utama:** Tanggal PERIODE berkas Anda memang sudah sama, **tetapi seluruh berkas yang Anda pilih adalah laporan {t_names.get(single_t, single_t)}** ({type_counts[single_t]} berkas).\n\n"
+                                f"Sistem memerlukan **4 jenis laporan yang berbeda** untuk menyusun analisis:\n"
+                                f"1. 💳 Pinjaman (LW321)\n"
+                                f"2. 💰 Tabungan (DI319)\n"
+                                f"3. 🏛️ Giro (DI321)\n"
+                                f"4. 📜 Deposito (CI324)"
+                            )
+
+                        st.markdown(f"**Ringkasan Tipe Berkas Terbaca ({val_res.valid_files_count}/{val_res.total_files_analyzed}):**")
+                        c_a, c_b = st.columns(2)
+                        with c_a:
+                            st.caption(f"• 💳 Pinjaman (LW321): **{type_counts.get('LW321', 0)}** file")
+                            st.caption(f"• 💰 Tabungan (DI319): **{type_counts.get('DI319', 0)}** file")
+                        with c_b:
+                            st.caption(f"• 🏛️ Giro (DI321): **{type_counts.get('DI321', 0)}** file")
+                            st.caption(f"• 📜 Deposito (CI324): **{type_counts.get('CI324', 0)}** file")
+                            
+                        if val_res.duplicate_conflicts:
+                            st.warning(f"⚠️ Ditemukan **{len(val_res.duplicate_conflicts)}** berkas duplikat jenis laporan pada tanggal yang sama.")
+                            for dup in val_res.duplicate_conflicts[:3]:
+                                st.caption(f"- {dup.get('message', str(dup))}")
+                            if len(val_res.duplicate_conflicts) > 3:
+                                st.caption(f"- *...dan {len(val_res.duplicate_conflicts) - 3} duplikat lainnya.*")
+                                
+                        if val_res.incomplete_batches:
+                            st.info("📋 **Laporan yang Masih Kurang:**")
+                            for dt_iso, b in list(val_res.incomplete_batches.items())[:3]:
+                                miss_names = []
+                                for m in b.get("missing", []):
+                                    if m == "LW321": miss_names.append("Pinjaman (LW321)")
+                                    elif m == "DI319": miss_names.append("Tabungan (DI319)")
+                                    elif m == "DI321": miss_names.append("Giro (DI321)")
+                                    elif m == "CI324": miss_names.append("Deposito (CI324)")
+                                miss_str = ", ".join(miss_names)
+                                st.caption(f"- Tanggal **{b.get('display_date', dt_iso)}**: Belum ada `{miss_str}`")
+                            if len(val_res.incomplete_batches) > 3:
+                                st.caption(f"- *...dan {len(val_res.incomplete_batches) - 3} tanggal lainnya.*")
+
+                        if val_res.invalid_files:
+                            st.error(f"❌ **{len(val_res.invalid_files)} berkas tidak dapat diproses:**")
+                            for inv in val_res.invalid_files[:3]:
+                                st.caption(f"- `{inv['filename']}`: {inv['error']}")
 
     with st.expander("🗑️ Pengaturan Data / Reset", expanded=False):
         st.markdown("<div style='font-size: 11px; color: #CBD5E1;'>Kosongkan seluruh data yang pernah diunggah dan kembalikan dashboard ke kondisi awal bawaan.</div>", unsafe_allow_html=True)
