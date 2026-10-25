@@ -123,6 +123,18 @@ def save_uploaded_file(uploaded_file, target_filename):
     clear_cache()
     return file_path
 
+def read_excel_fast(path_or_buffer, skiprows=0, **kwargs):
+    """
+    High-performance Excel reader.
+    Attempts to use python-calamine (Rust-based Excel parser, 15x faster),
+    falling back to standard pandas engine if unavailable or if buffer issues occur.
+    """
+    try:
+        import python_calamine
+        return pd.read_excel(path_or_buffer, skiprows=skiprows, engine="calamine", **kwargs)
+    except Exception:
+        return pd.read_excel(path_or_buffer, skiprows=skiprows, **kwargs)
+
 def load_loan_master(source_path_or_buffer=None):
     """Load and normalize Loan Type California master."""
     if source_path_or_buffer is None:
@@ -130,7 +142,7 @@ def load_loan_master(source_path_or_buffer=None):
     else:
         path = source_path_or_buffer
         
-    df = pd.read_excel(path)
+    df = read_excel_fast(path)
     df['LN_TYPE_CLEAN'] = clean_str(df['LN_TYPE']).str.upper()
     df['DESC_CLEAN'] = clean_str(df['DESCRIPTION']).str.upper()
     df['Business'] = clean_str(df['Business'])
@@ -156,7 +168,7 @@ def load_lending_data(source_path_or_buffer=None, master_df=None):
     else:
         path = source_path_or_buffer
         
-    df = pd.read_excel(path, skiprows=3)
+    df = read_excel_fast(path, skiprows=3)
     df = df.dropna(how='all', axis=1)
     
     # Clean and standardize columns
@@ -225,7 +237,7 @@ def load_giro_data(source_path_or_buffer=None):
     else:
         path = source_path_or_buffer
         
-    df = pd.read_excel(path, skiprows=3)
+    df = read_excel_fast(path, skiprows=3)
     df = df.dropna(how='all', axis=1)
     
     df['PERIODE_STR'] = clean_str(df['PERIODE'])
@@ -270,7 +282,7 @@ def load_deposito_data(source_path_or_buffer=None):
     else:
         path = source_path_or_buffer
         
-    df = pd.read_excel(path, skiprows=3)
+    df = read_excel_fast(path, skiprows=3)
     df = df.dropna(how='all', axis=1)
     
     df['PERIODE_STR'] = clean_str(df['PERIODE'])
@@ -318,7 +330,7 @@ def load_tabungan_data(source_path_or_buffer=None):
     else:
         path = source_path_or_buffer
         
-    df = pd.read_excel(path, skiprows=5)
+    df = read_excel_fast(path, skiprows=5)
     df = df.dropna(how='all', axis=1)
     
     df['PERIODE_STR'] = clean_str(df['periode'])

@@ -19,6 +19,21 @@ from typing import Dict, List, Optional, Tuple, Union, BinaryIO, Any
 import pandas as pd
 import numpy as np
 
+def _read_excel_fast(source, skiprows=0, nrows=None, header="DEFAULT"):
+    kwargs = {}
+    if skiprows:
+        kwargs["skiprows"] = skiprows
+    if nrows is not None:
+        kwargs["nrows"] = nrows
+    if header != "DEFAULT":
+        kwargs["header"] = header
+
+    try:
+        import python_calamine
+        return pd.read_excel(source, engine="calamine", **kwargs)
+    except Exception:
+        return pd.read_excel(source, **kwargs)
+
 
 # Report type definitions and signature rules
 REPORT_TYPES = ["LW321", "DI321", "CI324", "DI319"]
@@ -215,7 +230,7 @@ def inspect_and_identify_report(
 
     try:
         # Read first 15 rows to detect structure
-        preview_df = pd.read_excel(source_file_or_buffer, header=None, nrows=15)
+        preview_df = _read_excel_fast(source_file_or_buffer, header=None, nrows=15)
     except Exception as e:
         return ReportValidationResult(
             is_valid=False,
@@ -294,7 +309,7 @@ def inspect_and_identify_report(
         if hasattr(source_file_or_buffer, "seek"):
             source_file_or_buffer.seek(0)
 
-        df_full = pd.read_excel(source_file_or_buffer, skiprows=header_row_idx)
+        df_full = _read_excel_fast(source_file_or_buffer, skiprows=header_row_idx)
         df_full = df_full.dropna(how="all", axis=0).dropna(how="all", axis=1)
     except Exception as e:
         return ReportValidationResult(

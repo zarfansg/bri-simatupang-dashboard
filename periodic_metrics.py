@@ -11,8 +11,11 @@ Strict banking rules enforced:
 """
 
 import io
+import os
+import json
+import shutil
 import datetime
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, asdict
 from typing import Dict, List, Optional, Tuple, Any, Union
 
 import openpyxl
@@ -23,7 +26,8 @@ from data_loader import (
     clean_num,
     clean_str,
     load_loan_master,
-    format_rupiah
+    format_rupiah,
+    read_excel_fast
 )
 
 
@@ -105,7 +109,7 @@ def extract_daily_snapshot_from_batch(
     if hasattr(lw_source, "seek"):
         lw_source.seek(0)
     
-    df_lw = pd.read_excel(lw_source, skiprows=3)
+    df_lw = read_excel_fast(lw_source, skiprows=3)
     df_lw = df_lw.dropna(how="all", axis=1)
     
     df_lw["LN_TYPE_CLEAN"] = clean_str(df_lw.get("LN_TYPE", pd.Series(dtype=str))).str.upper()
@@ -152,7 +156,7 @@ def extract_daily_snapshot_from_batch(
     if hasattr(giro_source, "seek"):
         giro_source.seek(0)
         
-    df_giro = pd.read_excel(giro_source, skiprows=3)
+    df_giro = read_excel_fast(giro_source, skiprows=3)
     df_giro = df_giro.dropna(how="all", axis=1)
     giro_balance = float(clean_num(df_giro.get("BALANCE", pd.Series(dtype=float))).sum())
     giro_count = len(df_giro)
@@ -163,7 +167,7 @@ def extract_daily_snapshot_from_batch(
     if hasattr(dep_source, "seek"):
         dep_source.seek(0)
         
-    df_dep = pd.read_excel(dep_source, skiprows=3)
+    df_dep = read_excel_fast(dep_source, skiprows=3)
     df_dep = df_dep.dropna(how="all", axis=1)
     dep_col = "CBAL Base" if "CBAL Base" in df_dep.columns else "BALANCE"
     deposito_balance = float(clean_num(df_dep.get(dep_col, pd.Series(dtype=float))).sum())
@@ -175,7 +179,7 @@ def extract_daily_snapshot_from_batch(
     if hasattr(tab_source, "seek"):
         tab_source.seek(0)
         
-    df_tab = pd.read_excel(tab_source, skiprows=5)
+    df_tab = read_excel_fast(tab_source, skiprows=5)
     df_tab = df_tab.dropna(how="all", axis=1)
     tab_col = "Balance dalam IDR" if "Balance dalam IDR" in df_tab.columns else "balance"
     tabungan_balance = float(clean_num(df_tab.get(tab_col, pd.Series(dtype=float))).sum())
@@ -557,4 +561,91 @@ def generate_demo_periodic_batch() -> List[Tuple[io.BytesIO, str]]:
         file_items.append((buf_tab, f"DI319_{date_clean}.xlsx"))
 
     return file_items
+
+
+# ==============================================================================
+# PERSISTENT SNAPSHOT STORAGE & 7-DAY RETENTION ENGINE
+# ==============================================================================
+PERIODIC_STORE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "periodic_store")
+PERIODIC_STORE_FILE = os.path.join(PERIODIC_STORE_DIR, "snapshots_store.json")
+
+def load_periodic_store() -> List[Dict[str, Any]]:
+    """Load raw stored snapshots from JSON file."""
+    if not os.path.exists(PERIODIC_STORE_FILE):
+        return []
+    try:
+        with open(PERIODIC_STORE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def save_periodic_snapshots(snapshots: List[DailyMetricsSnapshot], retention_days: int = 14) -> int:
+    """
+    Save/merge daily metrics snapshots to disk store with automatic retention pruning.
+    Retains snapshots across browser reloads for at least retention_days (default 14 days).
+    """
+    os.makedirs(PERIODIC_STORE_DIR, exist_ok=True)
+    existing_store = load_periodic_store()
+    now_iso = datetime.datetime.now().isoformat()
+    
+    # Map by reporting_date to avoid duplicates and update existing dates
+    store_map = {item["reporting_date"]: item for item in existing_store if "reporting_date" in item}
+    for s in snapshots:
+        d_dict = asdict(s)
+        d_dict["stored_at"] = now_iso
+        store_map[s.reporting_date] = d_dict
+        
+    # Auto-prune items older than retention_days
+    cutoff_time = datetime.datetime.now() - datetime.timedelta(days=retention_days)
+    pruned_items = []
+    for d_iso, item in store_map.items():
+        stored_at_str = item.get("stored_at", now_iso)
+        try:
+            stored_dt = datetime.datetime.fromisoformat(stored_at_str)
+            if stored_dt >= cutoff_time:
+                pruned_items.append(item)
+        except Exception:
+            pruned_items.append(item)
+            
+    # Sort chronologically by date
+    pruned_items.sort(key=lambda x: x.get("reporting_date", ""))
+    with open(PERIODIC_STORE_FILE, "w", encoding="utf-8") as f:
+        json.dump(pruned_items, f, indent=2)
+        
+    return len(pruned_items)
+
+def load_periodic_snapshots() -> List[DailyMetricsSnapshot]:
+    """Load all retained snapshots from disk store as DailyMetricsSnapshot objects."""
+    raw_list = load_periodic_store()
+    snapshots = []
+    for item in raw_list:
+        try:
+            data = {k: v for k, v in item.items() if k != "stored_at"}
+            snapshots.append(DailyMetricsSnapshot(**data))
+        except Exception:
+            pass
+    snapshots.sort(key=lambda s: s.reporting_date)
+    return snapshots
+
+def clear_all_dashboard_data():
+    """Completely resets all uploaded files, periodic store, and caches to initial default."""
+    from data_loader import CACHE_DIR, UPLOAD_DIR
+    # 1. Clear periodic snapshots store
+    if os.path.exists(PERIODIC_STORE_DIR):
+        shutil.rmtree(PERIODIC_STORE_DIR, ignore_errors=True)
+    # 2. Clear uploaded latest files
+    if os.path.exists(UPLOAD_DIR):
+        for f in os.listdir(UPLOAD_DIR):
+            fp = os.path.join(UPLOAD_DIR, f)
+            try:
+                if os.path.isfile(fp): os.remove(fp)
+            except Exception: pass
+    # 3. Clear parquet cache
+    if os.path.exists(CACHE_DIR):
+        for f in os.listdir(CACHE_DIR):
+            fp = os.path.join(CACHE_DIR, f)
+            try:
+                if os.path.isfile(fp): os.remove(fp)
+            except Exception: pass
 
