@@ -5,6 +5,12 @@ Branch Code: 443 | KC Jakarta TB Simatupang
 """
 
 import os
+import sys
+
+_current_dir = os.path.dirname(os.path.abspath(__file__))
+if _current_dir not in sys.path:
+    sys.path.insert(0, _current_dir)
+
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -22,11 +28,18 @@ from data_loader import (
     save_uploaded_file,
     UNIT_METADATA
 )
-from exporter import export_dashboard_to_excel
+from exporter import export_dashboard_to_excel, export_periodic_dashboard_to_excel
 from metrics import (
     compute_lending_kpis,
     compute_funding_kpis,
     compute_unit_breakdown_matrix
+)
+from batch_validator import validate_and_group_multiday_batches, REPORT_TYPES
+from periodic_metrics import (
+    extract_daily_snapshot_from_batch,
+    compute_periodic_metrics,
+    generate_demo_periodic_batch,
+    DailyMetricsSnapshot
 )
 from styles import (
     inject_styles,
@@ -85,7 +98,13 @@ with st.sidebar:
     st.markdown("### 📌 Navigasi Menu")
     menu_page = st.radio(
         "Pilih Halaman:",
-        ["Ringkasan (Overview)", "Pinjaman (Lending)", "Simpanan (Funding)", "Kualitas Data & Rekonsiliasi"],
+        [
+            "Ringkasan (Overview)",
+            "Pantauan Periodik (Time-Series)",
+            "Pinjaman (Lending)",
+            "Simpanan (Funding)",
+            "Kualitas Data & Rekonsiliasi"
+        ],
         index=0,
         label_visibility="collapsed"
     )
@@ -389,6 +408,422 @@ if menu_page == "Ringkasan (Overview)":
 
 
 # ==============================================================================
+# HALAMAN BARU: PANTAUAN PERIODIK (TIME-SERIES)
+# ==============================================================================
+elif menu_page == "Pantauan Periodik (Time-Series)":
+    st.markdown("### 📈 Pantauan Kinerja Bisnis Periodik (Harian & Time-Series)")
+    st.caption("Monitoring pergerakan saldo simpanan dan baki debet pinjaman harian, evaluasi pertumbuhan DtD dan MTD, serta ekspor matriks resmi Bank BRI.")
+
+    # 1. Input Source & Multi-File Uploader
+    st.markdown("#### 📤 Unggah Berkas Laporan Harian (Multi-File)")
+    st.caption("Silakan unggah banyak berkas laporan Excel (.xlsx) sekaligus. Sistem membaca tipe laporan (`LW321`, `DI319`, `DI321`, `CI324`) dan tanggal buku dari kolom `PERIODE` secara otomatis tanpa memandang nama file.")
+
+    up_col1, up_col2 = st.columns([3, 1])
+    with up_col1:
+        uploaded_multi_files = st.file_uploader(
+            "Pilih berkas harian (dapat memilih banyak berkas sekaligus):",
+            type=["xlsx"],
+            accept_multiple_files=True,
+            key="periodic_multi_uploader",
+            help="Pilih banyak file Excel laporan harian BRI untuk dianalisis lintas tanggal."
+        )
+    with up_col2:
+        st.markdown("<div style='height: 28px;'></div>", unsafe_allow_html=True)
+        use_sample_simulation = st.checkbox(
+            "💡 Gunakan Data Demo (5 Hari)",
+            value=False,
+            key="periodic_demo_checkbox",
+            help="Muat contoh dataset harian terverifikasi (1–5 Oktober) untuk uji coba tampilan dan ekspor."
+        )
+
+    file_items = []
+    if uploaded_multi_files:
+        file_items = [(f, f.name) for f in uploaded_multi_files]
+    elif use_sample_simulation:
+        # Load realistic 5-day demo dataset for KC Simatupang
+        file_items = generate_demo_periodic_batch()
+
+    if not file_items:
+        st.markdown("""
+        <div style="background-color: #F8FAFC; border: 1px dashed #CBD5E1; border-radius: 12px; padding: 32px; text-align: center; margin-top: 16px;">
+            <div style="font-size: 38px; margin-bottom: 12px;">📁</div>
+            <div style="font-size: 16px; font-weight: 700; color: #0F172A;">Belum Ada Berkas Harian yang Dipilih</div>
+            <div style="font-size: 13px; color: #64748B; max-width: 580px; margin: 8px auto 16px auto;">
+                Untuk melihat dashboard periodik, silakan unggah berkas laporan harian pada kotak di atas, atau centang opsi <b>'Gunakan Data Demo (5 Hari)'</b> untuk melihat simulasi visual secara instan.
+            </div>
+            <div style="display: inline-block; background-color: #EBF4FC; color: #0857C3; font-size: 12px; font-weight: 600; padding: 6px 14px; border-radius: 20px;">
+                Persyaratan per tanggal: 1 LW321 (Pinjaman), 1 DI319 (Tabungan), 1 DI321 (Giro), 1 CI324 (Deposito)
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    else:
+        # Step 1: Run Ingestion & Multi-Day Validation
+        with st.spinner("Memindai berkas, mengidentifikasi laporan, dan memverifikasi tanggal buku..."):
+            val_res = validate_and_group_multiday_batches(file_items)
+
+        # MANDATORY REQUIREMENT 6: Display validation status and detected periods BEFORE calculating metrics!
+        st.markdown("---")
+        st.markdown("#### 🔍 Hasil Audit Validasi & Deteksi Periode Laporan")
+        
+        stat_c1, stat_c2, stat_c3, stat_c4 = st.columns(4)
+        with stat_c1:
+            st.metric("Total Berkas Dianalisis", f"{val_res.total_files_analyzed} Berkas")
+        with stat_c2:
+            st.metric("Berkas Tervalidasi", f"{val_res.valid_files_count} Berkas")
+        with stat_c3:
+            st.metric("Tanggal Terdeteksi", f"{len(val_res.all_detected_dates)} Tanggal")
+        with stat_c4:
+            st.metric("Batch Lengkap (4/4)", f"{len(val_res.complete_dates)} Hari Siap")
+
+        # Breakdown table per detected date
+        with st.expander("📋 Rincian Status Kelengkapan Batch per Tanggal", expanded=True):
+            date_status_rows = []
+            for d in val_res.all_detected_dates:
+                is_comp = (d in val_res.complete_dates)
+                if is_comp:
+                    b_info = val_res.complete_batches[d]
+                    date_status_rows.append({
+                        "Tanggal Buku": b_info["display_date"],
+                        "ISO Date": d,
+                        "Status Batch": "🟢 LENGKAP (4/4)",
+                        "Laporan Tersedia": ", ".join(sorted(list(b_info["reports"].keys()))),
+                        "Keterangan": "Memenuhi syarat 4 laporan identik. Siap dihitung."
+                    })
+                else:
+                    b_inc = val_res.incomplete_batches.get(d, {})
+                    pres = b_inc.get("present", [])
+                    miss = b_inc.get("missing", [])
+                    has_dup = b_inc.get("has_duplicate_conflict", False)
+                    
+                    if has_dup:
+                        status_str = "⚠️ KONFLIK DUPLIKAT"
+                        notes = "Terdapat lebih dari satu laporan sejenis pada tanggal yang sama."
+                    else:
+                        status_str = f"🔴 KURANG ({len(pres)}/4)"
+                        notes = f"Kurang laporan: {', '.join(miss)}"
+
+                    date_status_rows.append({
+                        "Tanggal Buku": b_inc.get("display_date", d),
+                        "ISO Date": d,
+                        "Status Batch": status_str,
+                        "Laporan Tersedia": ", ".join(sorted(pres)) if pres else "None",
+                        "Keterangan": notes
+                    })
+            
+            if date_status_rows:
+                st.dataframe(pd.DataFrame(date_status_rows), use_container_width=True, hide_index=True)
+
+        # Invalid files warning
+        if val_res.invalid_files:
+            st.warning(f"⚠️ Ditemukan **{len(val_res.invalid_files)}** berkas tidak valid/gagal diproses:")
+            for inv in val_res.invalid_files:
+                st.caption(f"- **{inv['filename']}**: {inv['error']}")
+
+        # Duplicate conflicts warning
+        if val_res.duplicate_conflicts:
+            st.error(f"⚠️ Ditemukan **{len(val_res.duplicate_conflicts)}** konflik duplikasi laporan:")
+            for dup in val_res.duplicate_conflicts:
+                st.caption(f"- {dup.get('message', str(dup))}")
+
+        # Check if we have complete dates
+        if len(val_res.complete_dates) == 0:
+            st.warning("⚠️ **Tidak ada tanggal dengan 4 laporan lengkap tanpa konflik.** Metrik belum dapat dihitung. Silakan lengkapi berkas yang kurang.")
+        else:
+            # Step 2: Compute Periodic Metrics
+            st.markdown("---")
+            st.markdown("#### ⚡ Analisis Kinerja Bisnis Periodik")
+
+            # Month-End Baseline Setup
+            base_col1, base_col2 = st.columns([3, 1])
+            with base_col1:
+                use_month_end_base = st.toggle(
+                    "Gunakan Baseline Akhir Bulan Lalu (30 September 2026) untuk Perhitungan MTD",
+                    value=True,
+                    help="Jika dinonaktifkan, perbandingan MTD akan berstatus N/A sesuai aturan tata kelola data."
+                )
+
+            month_end_baseline = None
+            if use_month_end_base and df_tabungan_raw is not None and df_lending_raw is not None:
+                b_dpk = compute_funding_kpis(df_tabungan_raw, df_giro_raw, df_deposito_raw)
+                b_lend = compute_lending_kpis(df_lending_raw)
+                month_end_baseline = {
+                    "date": "2026-09-30",
+                    "display_date": "30/09/2026",
+                    "is_verified": True,
+                    "total_dpk": b_dpk["total_funding"],
+                    "tabungan_balance": b_dpk["tab_balance"],
+                    "giro_balance": b_dpk["giro_balance"],
+                    "deposito_balance": b_dpk["dep_balance"],
+                    "casa_balance": b_dpk["casa_balance"],
+                    "os_lending_main": b_lend["os_combined"],
+                    "os_small": b_lend["os_small"],
+                    "os_consumer": b_lend["os_consumer"]
+                }
+
+            # Extract daily snapshots for complete dates
+            with st.spinner("Mengekstrak baki debet pinjaman & saldo simpanan..."):
+                daily_snapshots = {}
+                for d_str in val_res.complete_dates:
+                    b_dict = val_res.complete_batches[d_str]
+                    daily_snapshots[d_str] = extract_daily_snapshot_from_batch(
+                        reporting_date=d_str,
+                        display_date=b_dict["display_date"],
+                        reports_dict=b_dict["reports"],
+                        master_df=master_df
+                    )
+
+                periodic_summary = compute_periodic_metrics(
+                    daily_snapshots=daily_snapshots,
+                    month_end_baseline=month_end_baseline
+                )
+
+            latest_d = periodic_summary.latest_date
+            latest_snap = periodic_summary.snapshots_by_date[latest_d]
+            latest_comp = periodic_summary.comparisons_by_date[latest_d]
+
+            # DtD and MTD Context Banner
+            dtd_info_str = ""
+            if latest_comp.dtd_baseline_date:
+                gap_desc = f"{latest_comp.dtd_calendar_gap_days} hari kalender"
+                warn_tag = " &bull; ⚠️ <i>Lompat kalender (akhir pekan/libur)</i>" if not latest_comp.dtd_is_consecutive else ""
+                dtd_info_str = f"&bull; DtD Baseline: <b>{latest_comp.dtd_baseline_date}</b> ({gap_desc}){warn_tag}"
+            else:
+                dtd_info_str = "&bull; DtD Baseline: <i>Tanggal pertama (tidak ada snapshot sebelumnya)</i>"
+
+            mtd_info_str = ""
+            if latest_comp.mtd_is_available:
+                mtd_info_str = f"&bull; MTD Baseline: <b>{latest_comp.mtd_baseline_date}</b>"
+            else:
+                mtd_info_str = "&bull; MTD Baseline: <span style='color: #888;'>N/A (Tidak tersedia)</span>"
+
+            st.markdown(f"""
+            <div style="background-color: #EBF4FC; border-left: 4px solid #0857C3; padding: 12px 18px; border-radius: 6px; margin: 12px 0 20px 0; font-size: 13px; color: #0F172A;">
+                <b>📅 Posisi Tanggal Terakhir: {latest_snap.display_date}</b> {dtd_info_str} {mtd_info_str}
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Scorecard: Simpanan
+            st.markdown("##### 💰 Saldo Simpanan (DPK) — Posisi Terkini")
+            dpk_col1, dpk_col2, dpk_col3, dpk_col4 = st.columns(4)
+
+            # DtD text helper with green/red indicator
+            def _format_dtd_subtext(delta_val, pct_val):
+                if delta_val is None:
+                    return "-"
+                sign = "+" if delta_val > 0 else ""
+                if delta_val > 0:
+                    return f"<span style='color: #15803D; font-weight: 700;'>▲ {sign}{format_rupiah(delta_val)} ({sign}{pct_val:.2f}%) DtD</span>"
+                elif delta_val < 0:
+                    return f"<span style='color: #DC2626; font-weight: 700;'>▼ {sign}{format_rupiah(delta_val)} ({sign}{pct_val:.2f}%) DtD</span>"
+                else:
+                    return f"<span style='color: #475569;'>0 DtD (Tetap)</span>"
+
+            with dpk_col1:
+                render_kpi_card(
+                    "Total Simpanan (DPK)",
+                    format_rupiah(latest_snap.total_dpk),
+                    format_rupiah(latest_snap.total_dpk, "full"),
+                    _format_dtd_subtext(latest_comp.dtd_delta.get("total_dpk"), latest_comp.dtd_pct.get("total_dpk")),
+                    "strip-blue"
+                )
+            with dpk_col2:
+                render_kpi_card(
+                    "Tabungan",
+                    format_rupiah(latest_snap.tabungan_balance),
+                    format_rupiah(latest_snap.tabungan_balance, "full"),
+                    _format_dtd_subtext(latest_comp.dtd_delta.get("tabungan_balance"), latest_comp.dtd_pct.get("tabungan_balance")),
+                    "strip-blue"
+                )
+            with dpk_col3:
+                render_kpi_card(
+                    "Giro",
+                    format_rupiah(latest_snap.giro_balance),
+                    format_rupiah(latest_snap.giro_balance, "full"),
+                    _format_dtd_subtext(latest_comp.dtd_delta.get("giro_balance"), latest_comp.dtd_pct.get("giro_balance")),
+                    "strip-blue"
+                )
+            with dpk_col4:
+                render_kpi_card(
+                    "Deposito",
+                    format_rupiah(latest_snap.deposito_balance),
+                    format_rupiah(latest_snap.deposito_balance, "full"),
+                    _format_dtd_subtext(latest_comp.dtd_delta.get("deposito_balance"), latest_comp.dtd_pct.get("deposito_balance")),
+                    "strip-blue"
+                )
+
+            # Scorecard: Pinjaman
+            st.markdown("##### 💳 Baki Debet Pinjaman Utama (Small & Consumer) — Posisi Terkini")
+            ln_col1, ln_col2, ln_col3, ln_col4 = st.columns(4)
+            with ln_col1:
+                render_kpi_card(
+                    "Total Pinjaman Utama",
+                    format_rupiah(latest_snap.os_lending_main),
+                    format_rupiah(latest_snap.os_lending_main, "full"),
+                    _format_dtd_subtext(latest_comp.dtd_delta.get("os_lending_main"), latest_comp.dtd_pct.get("os_lending_main")),
+                    "strip-orange"
+                )
+            with ln_col2:
+                render_kpi_card(
+                    "Pinjaman Segmen Small",
+                    format_rupiah(latest_snap.os_small),
+                    format_rupiah(latest_snap.os_small, "full"),
+                    _format_dtd_subtext(latest_comp.dtd_delta.get("os_small"), latest_comp.dtd_pct.get("os_small")),
+                    "strip-orange"
+                )
+            with ln_col3:
+                render_kpi_card(
+                    "Pinjaman Segmen Konsumer",
+                    format_rupiah(latest_snap.os_consumer),
+                    format_rupiah(latest_snap.os_consumer, "full"),
+                    _format_dtd_subtext(latest_comp.dtd_delta.get("os_consumer"), latest_comp.dtd_pct.get("os_consumer")),
+                    "strip-orange"
+                )
+            with ln_col4:
+                render_kpi_card(
+                    "CASA Ratio",
+                    f"{latest_snap.casa_pct:.2f}%",
+                    f"Saldo CASA: {format_rupiah(latest_snap.casa_balance)}",
+                    f"DPK Total: {format_rupiah(latest_snap.total_dpk)}",
+                    "strip-green"
+                )
+
+            # Interactive Plotly Charts
+            st.markdown("---")
+            st.markdown("#### 📊 Grafik Tren Perkembangan Harian")
+            chart_tab1, chart_tab2, chart_tab3 = st.tabs([
+                "📈 Tren Saldo Simpanan (DPK)",
+                "💳 Tren Baki Debet Pinjaman",
+                "📊 Perubahan Harian (DtD Delta)"
+            ])
+
+            sum_df = periodic_summary.summary_df
+
+            with chart_tab1:
+                fig_dpk = go.Figure()
+                fig_dpk.add_trace(go.Scatter(x=sum_df["Tanggal"], y=sum_df["Total DPK"], mode="lines+markers", name="Total DPK", line=dict(color=BRI_BLUE, width=3)))
+                fig_dpk.add_trace(go.Scatter(x=sum_df["Tanggal"], y=sum_df["Tabungan"], mode="lines+markers", name="Tabungan", line=dict(color="#10B981", width=2)))
+                fig_dpk.add_trace(go.Scatter(x=sum_df["Tanggal"], y=sum_df["Giro"], mode="lines+markers", name="Giro", line=dict(color=BRI_ORANGE, width=2)))
+                fig_dpk.add_trace(go.Scatter(x=sum_df["Tanggal"], y=sum_df["Deposito"], mode="lines+markers", name="Deposito", line=dict(color="#6366F1", width=2)))
+                fig_dpk.update_layout(
+                    title="Tren Saldo Simpanan Harian (Rupiah)",
+                    height=360,
+                    margin=dict(t=40, b=20, l=20, r=20),
+                    yaxis=dict(title="Saldo (Rp)", tickformat=","),
+                    hovermode="x unified"
+                )
+                st.plotly_chart(fig_dpk, use_container_width=True)
+
+            with chart_tab2:
+                fig_lend = go.Figure()
+                fig_lend.add_trace(go.Scatter(x=sum_df["Tanggal"], y=sum_df["Total Pinjaman"], mode="lines+markers", name="Total Pinjaman Utama", line=dict(color=BRI_BLUE, width=3)))
+                fig_lend.add_trace(go.Scatter(x=sum_df["Tanggal"], y=sum_df["Pinjaman Small"], mode="lines+markers", name="Pinjaman Small", line=dict(color=BRI_ORANGE, width=2)))
+                fig_lend.add_trace(go.Scatter(x=sum_df["Tanggal"], y=sum_df["Pinjaman Konsumer"], mode="lines+markers", name="Pinjaman Konsumer", line=dict(color="#8B5CF6", width=2)))
+                fig_lend.update_layout(
+                    title="Tren Baki Debet Pinjaman Harian (Rupiah)",
+                    height=360,
+                    margin=dict(t=40, b=20, l=20, r=20),
+                    yaxis=dict(title="Baki Debet (Rp)", tickformat=","),
+                    hovermode="x unified"
+                )
+                st.plotly_chart(fig_lend, use_container_width=True)
+
+            with chart_tab3:
+                # DtD Delta Bar Chart
+                df_dtd_chart = sum_df.dropna(subset=["DtD DPK (Rp)"]).copy()
+                if not df_dtd_chart.empty:
+                    fig_bar = px.bar(
+                        df_dtd_chart,
+                        x="Tanggal",
+                        y="DtD DPK (Rp)",
+                        title="Delta Pertumbuhan Simpanan Harian DtD (Rp)",
+                        color="DtD DPK (Rp)",
+                        color_continuous_scale=["#EF4444", "#E2E8F0", "#10B981"]
+                    )
+                    fig_bar.update_layout(height=340, margin=dict(t=40, b=20, l=20, r=20), yaxis=dict(title="Delta DtD (Rp)", tickformat=","))
+                    st.plotly_chart(fig_bar, use_container_width=True)
+                else:
+                    st.info("Diperlukan minimal 2 tanggal untuk menampilkan grafik pertumbuhan harian DtD.")
+
+            # Daily Matrix Tables (Format Resmi Excel BRI)
+            st.markdown("---")
+            st.markdown("#### 📑 Matriks Harian Kinerja Bisnis (Standar Kinerja Konsolidasi BRI)")
+            
+            tab_m1, tab_m2, tab_m3 = st.tabs([
+                "🏦 Keragaan Simpanan Harian",
+                "💳 Keragaan Pinjaman Harian",
+                "📋 Tabel Tren Lengkap"
+            ])
+
+            def _format_matrix_view(df_in):
+                df_clean = df_in.copy()
+                delta_cols = [c for c in df_clean.columns if "DtD" in c or "MTD" in c]
+                pct_cols = [c for c in df_clean.columns if "(%)" in c or "Ratio" in c]
+
+                def _style_growth(val):
+                    if val is None or pd.isna(val) or isinstance(val, str):
+                        return "color: #64748B; text-align: center;"
+                    try:
+                        v = float(val)
+                        if v > 0:
+                            return "color: #15803D; background-color: #DCFCE7; font-weight: 700; text-align: right;"
+                        elif v < 0:
+                            return "color: #B91C1C; background-color: #FEE2E2; font-weight: 700; text-align: right;"
+                        else:
+                            return "color: #334155; text-align: right;"
+                    except (ValueError, TypeError):
+                        return "color: #64748B; text-align: center;"
+
+                format_dict = {}
+                for c in df_clean.columns:
+                    if c in ["Indikator Produk", "Tanggal", "ISO_Date", "DtD Baseline"]:
+                        continue
+                    elif "Gap" in c:
+                        format_dict[c] = lambda v: f"{int(v)} hari" if pd.notna(v) and isinstance(v, (int, float)) else str(v or "-")
+                    elif c in pct_cols:
+                        format_dict[c] = lambda v: f"{v:+.2f}%" if pd.notna(v) and isinstance(v, (int, float)) and v != 0 else (f"{v:.2f}%" if pd.notna(v) and isinstance(v, (int, float)) else "N/A")
+                    else:
+                        format_dict[c] = lambda v: format_rupiah(v, "full") if pd.notna(v) and isinstance(v, (int, float)) else ("N/A" if "MTD" in c else "-")
+
+                styled = df_clean.style.format(format_dict, na_rep="N/A")
+                if delta_cols:
+                    styled = styled.map(_style_growth, subset=delta_cols)
+
+                return styled
+
+            with tab_m1:
+                st.markdown("##### Matriks Perkembangan Saldo Simpanan (DPK) Harian")
+                st.dataframe(_format_matrix_view(periodic_summary.daily_matrix_dpk), use_container_width=True, hide_index=True)
+
+            with tab_m2:
+                st.markdown("##### Matriks Perkembangan Baki Debet Pinjaman Harian")
+                st.dataframe(_format_matrix_view(periodic_summary.daily_matrix_lending), use_container_width=True, hide_index=True)
+
+            with tab_m3:
+                st.markdown("##### Tabel Rekapitulasi Rangkaian Tren Harian")
+                st.dataframe(_format_matrix_view(periodic_summary.summary_df), use_container_width=True, hide_index=True)
+
+            # Executive Excel Export Download Button
+            st.markdown("---")
+            st.markdown("#### 📥 Ekspor Laporan Periodik ke Excel (.xlsx)")
+            st.caption("Unduh workbook Excel resmi multi-sheet (`KERAGAAN_SIMPANAN_HARIAN`, `KERAGAAN_PINJAMAN_HARIAN`, `RINGKASAN_TREN_HARIAN`) berformat perbankan dengan formula aktif.")
+
+            periodic_excel_bytes = export_periodic_dashboard_to_excel(
+                periodic_summary=periodic_summary,
+                branch_name="KC Jakarta TB Simatupang (443)"
+            )
+
+            st.download_button(
+                label="📥 Unduh Rekap Periodik Excel (.xlsx)",
+                data=periodic_excel_bytes,
+                file_name=f"Rekap_Periodik_BRI_443_{latest_snap.reporting_date}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key="periodic_excel_download_btn"
+            )
+
+
+# ==============================================================================
 # HALAMAN 2: PINJAMAN (LENDING)
 # ==============================================================================
 elif menu_page == "Pinjaman (Lending)":
@@ -519,6 +954,10 @@ elif menu_page == "Pinjaman (Lending)":
         st.markdown("##### 📋 Data Rincian Debitur Pinjaman (Small & Consumer)")
         df_detail = df_lending[df_lending['IS_MAIN_KPI']].copy()
         
+        # Standardize Kol to integer
+        df_detail['KOL_NUM'] = pd.to_numeric(df_detail.get('KOL_ADK', 1), errors='coerce').fillna(1).round().astype(int)
+        df_detail['KOL_ADK'] = df_detail['KOL_NUM']
+        
         # Filter controls
         s_col1, s_col2, s_col3 = st.columns([2, 1, 1])
         with s_col1:
@@ -526,18 +965,38 @@ elif menu_page == "Pinjaman (Lending)":
         with s_col2:
             segmen_filter = st.selectbox("Filter Segmen:", ["Semua Segmen", "Small", "Consumer"])
         with s_col3:
-            kol_filter = st.selectbox("Filter Kol:", ["Semua Kol", "1", "2", "3", "4", "5"])
+            kol_options = ["Semua Kol", "1", "2", "3", "4", "5", "NPL (Kol 3, 4, 5)"]
+            kol_filter = st.selectbox(
+                "Filter Kol:", 
+                kol_options,
+                format_func=lambda x: {
+                    "Semua Kol": "Semua Kol",
+                    "1": "1 - Lancar",
+                    "2": "2 - DPK",
+                    "3": "3 - Kurang Lancar",
+                    "4": "4 - Diragukan",
+                    "5": "5 - Macet",
+                    "NPL (Kol 3, 4, 5)": "NPL (Kol 3, 4, 5)"
+                }.get(x, x)
+            )
             
         if search_query:
-            q = search_query.strip().upper()
+            q = search_query.strip()
             df_detail = df_detail[
-                df_detail['NAMA_DEBITUR_STR'].str.contains(q, na=False) |
-                df_detail['NOMOR_REKENING_STR'].str.contains(q, na=False)
+                df_detail['NAMA_DEBITUR_STR'].astype(str).str.contains(q, case=False, na=False) |
+                df_detail['NOMOR_REKENING_STR'].astype(str).str.contains(q, case=False, na=False)
             ]
         if segmen_filter != "Semua Segmen":
             df_detail = df_detail[df_detail['Business'] == segmen_filter]
         if kol_filter != "Semua Kol":
-            df_detail = df_detail[df_detail['KOL_ADK'].astype(str) == kol_filter]
+            if "NPL" in str(kol_filter):
+                df_detail = df_detail[df_detail['KOL_NUM'].isin([3, 4, 5])]
+            elif str(kol_filter).isdigit():
+                df_detail = df_detail[df_detail['KOL_NUM'] == int(kol_filter)]
+            else:
+                digits = [c for c in str(kol_filter) if c.isdigit()]
+                if digits:
+                    df_detail = df_detail[df_detail['KOL_NUM'] == int(digits[0])]
             
         # Select key columns for display
         cols_show = [
@@ -568,6 +1027,8 @@ elif menu_page == "Pinjaman (Lending)":
         st.markdown(f"Menampilkan **{len(df_show):,}** rekening:")
         
         df_display_formatted = df_show.copy()
+        if 'Kol' in df_display_formatted.columns:
+            df_display_formatted['Kol'] = pd.to_numeric(df_display_formatted['Kol'], errors='coerce').fillna(1).round().astype(int)
         if 'Plafon (Rp)' in df_display_formatted.columns:
             df_display_formatted['Plafon (Rp)'] = df_display_formatted['Plafon (Rp)'].apply(lambda x: format_rupiah(x, "full"))
         if 'Baki Debet (Rp)' in df_display_formatted.columns:

@@ -174,6 +174,10 @@ def load_lending_data(source_path_or_buffer=None, master_df=None):
     df['TUNGGAKAN_POKOK_NUM'] = clean_num(df.get('TUNGGAKAN POKOK', pd.Series(0, index=df.index)))
     df['TUNGGAKAN_BUNGA_NUM'] = clean_num(df.get('TUNGGAKAN BUNGA', pd.Series(0, index=df.index)))
     df['RATE_NUM'] = clean_num(df.get('RATE', pd.Series(0, index=df.index)))
+    if 'KOL_ADK' in df.columns:
+        df['KOL_ADK'] = pd.to_numeric(df['KOL_ADK'], errors='coerce').fillna(1).round().astype(int)
+    else:
+        df['KOL_ADK'] = 1
     
     # Join with master
     if master_df is None:
