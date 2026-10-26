@@ -149,25 +149,41 @@ with st.sidebar:
     
     st.markdown("---")
     with st.expander("📤 Unggah Berkas Laporan Harian", expanded=False):
+        if "upload_key_counter" not in st.session_state:
+            st.session_state["upload_key_counter"] = 0
+            
+        if "upload_success_message" in st.session_state:
+            st.success(st.session_state.pop("upload_success_message"))
+
         st.markdown("""
         <div style="font-size: 11px; color: #E2E8F0; line-height: 1.4; margin-bottom: 10px;">
             <b>Petunjuk Unggah:</b><br>
             • Format file: Excel (<code>.xlsx</code>), maks. <b>50 MB</b> per file.<br>
             • <b>Kapasitas:</b> Unggah 1 file per slot untuk tanggal yang sama (atau beberapa file jika ingin memuat riwayat multi-tanggal).<br>
-            • Tanggal buku diverifikasi otomatis dari kolom <code>PERIODE</code>.
+            • Tanggal buku diverifikasi otomatis dari kolom <code>PERIODE</code>.<br>
+            • <i>Berkas yang selesai diproses akan otomatis dibersihkan dari form.</i>
         </div>
         """, unsafe_allow_html=True)
         
-        slot_lw = st.file_uploader("1. Pinjaman (LW321):", type=["xlsx"], accept_multiple_files=True, key="slot_lw321")
-        slot_tb = st.file_uploader("2. Tabungan (DI319):", type=["xlsx"], accept_multiple_files=True, key="slot_di319")
-        slot_gr = st.file_uploader("3. Giro (DI321):", type=["xlsx"], accept_multiple_files=True, key="slot_di321")
-        slot_dp = st.file_uploader("4. Deposito (CI324):", type=["xlsx"], accept_multiple_files=True, key="slot_ci324")
+        up_ver = st.session_state["upload_key_counter"]
+        slot_lw = st.file_uploader("1. Pinjaman (LW321):", type=["xlsx"], accept_multiple_files=True, key=f"slot_lw321_{up_ver}")
+        slot_tb = st.file_uploader("2. Tabungan (DI319):", type=["xlsx"], accept_multiple_files=True, key=f"slot_di319_{up_ver}")
+        slot_gr = st.file_uploader("3. Giro (DI321):", type=["xlsx"], accept_multiple_files=True, key=f"slot_di321_{up_ver}")
+        slot_dp = st.file_uploader("4. Deposito (CI324):", type=["xlsx"], accept_multiple_files=True, key=f"slot_ci324_{up_ver}")
         
         all_uploaded = (slot_lw or []) + (slot_tb or []) + (slot_gr or []) + (slot_dp or [])
         
         if all_uploaded:
             st.info(f"📁 Terpilih: **{len(all_uploaded)}** berkas")
-            if st.button("⚡ Proses & Simpan Laporan", type="primary", use_container_width=True):
+            c_btn1, c_btn2 = st.columns([3, 2])
+            with c_btn1:
+                process_btn = st.button("⚡ Proses & Simpan", type="primary", use_container_width=True)
+            with c_btn2:
+                if st.button("🧹 Kosongkan", use_container_width=True, help="Bersihkan file dari form upload"):
+                    st.session_state["upload_key_counter"] += 1
+                    st.rerun()
+
+            if process_btn:
                 with st.spinner("Memindai dan memverifikasi berkas..."):
                     file_items = [(f, f.name) for f in all_uploaded]
                     val_res = validate_and_group_multiday_batches(file_items)
@@ -205,7 +221,9 @@ with st.sidebar:
                                 
                         clear_cache()
                         st.cache_data.clear()
-                        st.success(f"✅ Berhasil memproses {len(val_res.complete_dates)} tanggal laporan! Tersimpan di server.")
+                        # Auto-remove uploaded files by incrementing counter
+                        st.session_state["upload_key_counter"] += 1
+                        st.session_state["upload_success_message"] = f"✅ Berhasil memproses {len(val_res.complete_dates)} tanggal laporan! Berkas otomatis dibersihkan dari form upload."
                         st.rerun()
                     else:
                         st.error("⚠️ **Belum ada batch lengkap (4/4 jenis laporan pada tanggal yang sama).**")
@@ -283,9 +301,8 @@ with st.sidebar:
             clear_all_dashboard_data()
             clear_cache()
             st.cache_data.clear()
-            for k in ["slot_lw321", "slot_di319", "slot_di321", "slot_ci324", "last_processed_upload_sig"]:
-                st.session_state.pop(k, None)
-            st.success("✅ Seluruh data berhasil dikosongkan.")
+            st.session_state["upload_key_counter"] = st.session_state.get("upload_key_counter", 0) + 1
+            st.session_state["upload_success_message"] = "✅ Seluruh data berhasil dikosongkan dan form upload telah dibersihkan."
             st.rerun()
 
     if st.button("🔄 Segarkan Tampilan (Clear Cache)", use_container_width=True):
