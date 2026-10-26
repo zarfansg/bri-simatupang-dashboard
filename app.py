@@ -64,6 +64,74 @@ st.set_page_config(
 # Inject custom banking theme styles
 inject_styles()
 
+# --- BRANCH SECURITY GATE (AUTHENTICATION) ---
+def render_security_gate():
+    st.markdown("""
+    <div style="max-width: 520px; margin: 40px auto 20px auto; padding: 32px 36px; background: #FFFFFF; border-radius: 14px; box-shadow: 0 10px 30px rgba(0, 43, 91, 0.15); border: 1px solid #E2E8F0; text-align: center;">
+        <div style="display: inline-block; background: #0857C3; color: #FFFFFF; width: 56px; height: 56px; border-radius: 50%; line-height: 56px; font-size: 28px; margin-bottom: 14px; box-shadow: 0 4px 14px rgba(8, 87, 195, 0.35);">
+            🏦
+        </div>
+        <div style="font-size: 24px; font-weight: 800; color: #002B5B; letter-spacing: -0.5px;">
+            BANK BRI
+        </div>
+        <div style="font-size: 13px; font-weight: 700; color: #F37021; letter-spacing: 0.5px; margin-top: 2px;">
+            KC JAKARTA TB SIMATUPANG
+        </div>
+        <div style="font-size: 12px; color: #64748B; margin-top: 2px;">
+            Branch Code: <b>443</b> | Kanwil DKI 2
+        </div>
+        <div style="margin: 20px 0 18px 0; height: 1px; background: #E2E8F0;"></div>
+        <div style="font-size: 16px; font-weight: 700; color: #1E293B;">
+            🔐 Gerbang Otorisasi Akses Internal
+        </div>
+        <div style="font-size: 12px; color: #64748B; margin-top: 6px; line-height: 1.5;">
+            Sistem diproteksi. Masukkan Kunci Akses / PIN Cabang untuk membuka data portofolio pinjaman dan simpanan.
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    col_l, col_m, col_r = st.columns([1, 2, 1])
+    with col_m:
+        with st.form("branch_security_form", clear_on_submit=False):
+            pin_input = st.text_input(
+                "Kunci Akses Cabang:",
+                type="password",
+                placeholder="Masukkan PIN / Kunci Akses...",
+                help="Hubungi Pimpinan / Administrator KC TB Simatupang untuk mendapatkan akses."
+            )
+            submit_btn = st.form_submit_button("🔓 Buka Akses Dashboard", type="primary", use_container_width=True)
+            
+            if submit_btn:
+                custom_pin = None
+                try:
+                    if hasattr(st, "secrets") and "BRANCH_PIN" in st.secrets:
+                        custom_pin = str(st.secrets["BRANCH_PIN"]).strip()
+                except Exception:
+                    pass
+                
+                # If custom PIN is set in Streamlit Secrets, strictly enforce that PIN
+                if custom_pin:
+                    is_valid = (pin_input.strip() == custom_pin)
+                else:
+                    # Default branch PIN with typo tolerance
+                    is_valid = (pin_input.strip() in ["Califormia443", "California443"])
+
+                if is_valid:
+                    st.session_state["branch_auth_unlocked"] = True
+                    st.rerun()
+                else:
+                    st.error("❌ Kunci akses / PIN tidak valid. Silakan periksa kembali.")
+                    
+        st.markdown("""
+        <div style="text-align: center; font-size: 11px; color: #94A3B8; margin-top: 14px; line-height: 1.5;">
+            🔒 <i>Seluruh data laporan dilindungi Undang-Undang Kerahasiaan Bank.<br>Hanya untuk penggunaan internal Bank BRI KC Jakarta TB Simatupang.</i>
+        </div>
+        """, unsafe_allow_html=True)
+
+if not st.session_state.get("branch_auth_unlocked", False):
+    render_security_gate()
+    st.stop()
+
 # --- CACHED DATA LOADERS ---
 @st.cache_data(show_spinner="Memuat data portofolio cabang...")
 def get_dashboard_data():
@@ -97,6 +165,16 @@ with st.sidebar:
         </div>
     </div>
     """, unsafe_allow_html=True)
+
+    st.markdown("""
+    <div style="background: rgba(16, 185, 129, 0.15); border: 1px solid rgba(16, 185, 129, 0.4); border-radius: 8px; padding: 6px 10px; margin-bottom: 12px; text-align: center;">
+        <span style="color: #6EE7B7; font-size: 11px; font-weight: 700;">🟢 Akses Terotorisasi (KC 443)</span>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    if st.button("🔒 Kunci Dashboard (Logout)", use_container_width=True, help="Kunci kembali dashboard saat meninggalkan meja kerja"):
+        st.session_state["branch_auth_unlocked"] = False
+        st.rerun()
     
     st.markdown("### 📌 Navigasi Menu")
     menu_page = st.radio(
